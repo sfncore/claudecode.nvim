@@ -1,0 +1,48 @@
+#!/bin/bash
+
+set -euo pipefail
+
+# repro - Launch Neovim with the minimal "repro" fixture + a temp workspace.
+#
+# This is intended to provide a low-noise environment for reproducing issues in claudecode.nvim.
+
+FIXTURES_DIR="$(cd "$(dirname "$(dirname "${BASH_SOURCE[0]}")")" && pwd)"
+
+# Source common functions
+source "$FIXTURES_DIR/bin/common.sh"
+
+config="repro"
+if ! validate_config "$FIXTURES_DIR" "$config"; then
+  exit 1
+fi
+
+template_dir="$FIXTURES_DIR/$config/example"
+if [[ ! -d "$template_dir" ]]; then
+  echo "Error: repro template directory not found: $template_dir" >&2
+  exit 1
+fi
+
+workspace_dir="${TMPDIR:-/tmp}/claudecode.nvim-repro"
+
+# Safety check before deleting
+if [[ -z "$workspace_dir" || "$workspace_dir" == "/" ]]; then
+  echo "Error: unsafe workspace_dir: '$workspace_dir'" >&2
+  exit 1
+fi
+
+rm -rf "$workspace_dir"
+mkdir -p "$workspace_dir"
+cp -R "$template_dir/." "$workspace_dir/"
+
+echo "Repro workspace: $workspace_dir"
+echo "Repro config: $FIXTURES_DIR/$config"
+echo "Tip: run 'vve repro' to edit the config or open $template_dir/README.md for steps."
+
+# If no args are provided, open the default file to keep the window non-empty.
+if [[ $# -eq 0 ]]; then
+  nvim_args=("a.txt")
+else
+  nvim_args=("$@")
+fi
+
+(cd "$workspace_dir" && NVIM_APPNAME="$config" XDG_CONFIG_HOME="$FIXTURES_DIR" nvim "${nvim_args[@]}")
