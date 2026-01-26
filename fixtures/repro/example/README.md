@@ -13,44 +13,42 @@ repro
 
 That will:
 
-- create `/tmp/claudecode.nvim-repro` (reset on every run)
+- create `/tmp/claudecode.nvim-repro` (reset on every run; use `repro --keep` to reuse)
 - open Neovim with the **minimal** `fixtures/repro` config
 - open `a.txt` so your current window is non-empty
 
-## Reproducing issue #155 (leftover diff split)
+## Iterating on the config
 
-Goal: confirm that after accepting a diff for a file that was *not* already open, we do **not** leave behind an extra split.
+The Neovim config lives at `fixtures/repro/init.lua`.
 
-1. In Neovim, note window count:
+- Edit it from another terminal:
 
-   ```vim
-   :echo winnr('$')
-   ```
+  ```sh
+  vve repro
+  ```
 
-2. Start Claude:
+  Then restart the running `repro` Neovim instance to pick up changes.
 
-   ```vim
-   :ClaudeCode
-   ```
+- Or edit it from inside the running `repro` session:
 
-3. In the Claude terminal, ask Claude to make a small edit to `b.txt`.
+  ```vim
+  :ReproEditConfig
+  ```
 
-   **Important:** Do *not* open `b.txt` in a Neovim window yourself before the diff opens.
+> Note: config changes generally require restarting Neovim (this fixture avoids a plugin manager / hot-reload).
 
-4. When the diff opens, accept it:
+## Example flow (sanity check)
 
-   - `:w` from the proposed buffer **or**
-   - `<leader>aa`
+A basic end-to-end diff flow you can use to sanity-check the environment:
 
-5. Wait for Claude to close the diff (the plugin cleans up when Claude calls `close_tab`).
+1. Start Claude:
 
-6. Confirm window count returned to what it was in step 1:
+   - press `<leader>ac` (starts the server if needed, then opens the terminal), **or**
+   - run `:ClaudeCodeStart` then `:ClaudeCode`
 
-   ```vim
-   :echo winnr('$')
-   ```
-
-You should not see an orphaned split after accept.
+2. Ask Claude to edit `b.txt` (do not open it in a window first)
+3. Accept the diff with `:w` (or `<leader>aa`)
+4. Confirm you didn’t get any extra leftover windows: `:echo winnr('$')`
 
 ## Notes
 

@@ -23,6 +23,7 @@ local ok, claudecode = pcall(require, "claudecode")
 assert(ok, "Failed to load claudecode.nvim from repo root: " .. tostring(claudecode))
 
 claudecode.setup({
+  auto_start = false, -- avoid noisy startup + make restarts deterministic
   log_level = "debug",
   terminal = {
     provider = "native",
@@ -35,13 +36,54 @@ claudecode.setup({
   },
 })
 
+local function ensure_claudecode_started()
+  local ok_start, started_or_err, port_or_err = pcall(function()
+    return claudecode.start(false)
+  end)
+
+  if not ok_start then
+    vim.notify("ClaudeCode start crashed: " .. tostring(started_or_err), vim.log.levels.ERROR)
+    return false
+  end
+
+  local started = started_or_err
+  if started then
+    return true
+  end
+
+  -- start() returns false + "Already running" when running.
+  if port_or_err == "Already running" then
+    return true
+  end
+
+  vim.notify("ClaudeCode failed to start: " .. tostring(port_or_err), vim.log.levels.ERROR)
+  return false
+end
+
 -- Keymaps (kept small on purpose)
-vim.keymap.set("n", "<leader>ac", "<cmd>ClaudeCode<cr>", { desc = "Toggle Claude" })
-vim.keymap.set("n", "<leader>af", "<cmd>ClaudeCodeFocus<cr>", { desc = "Focus Claude" })
+vim.keymap.set("n", "<leader>ac", function()
+  if ensure_claudecode_started() then
+    vim.cmd("ClaudeCode")
+  end
+end, { desc = "Toggle Claude" })
+
+vim.keymap.set("n", "<leader>af", function()
+  if ensure_claudecode_started() then
+    vim.cmd("ClaudeCodeFocus")
+  end
+end, { desc = "Focus Claude" })
 
 vim.keymap.set("n", "<leader>aa", "<cmd>ClaudeCodeDiffAccept<cr>", { desc = "Accept diff" })
 vim.keymap.set("n", "<leader>ad", "<cmd>ClaudeCodeDiffDeny<cr>", { desc = "Deny diff" })
 
+
+-- Convenience helpers for iterating on this fixture.
+vim.api.nvim_create_user_command("ReproEditConfig", function()
+  local config_path = vim.fn.stdpath("config") .. "/init.lua"
+  vim.cmd("edit " .. vim.fn.fnameescape(config_path))
+end, { desc = "Edit the repro Neovim config" })
+
+vim.keymap.set("n", "<leader>ae", "<cmd>ReproEditConfig<cr>", { desc = "Edit repro config" })
 vim.keymap.set("n", "<leader>aw", function()
   vim.notify(("windows in tab: %d"):format(vim.fn.winnr("$")))
 end, { desc = "Claude: show window count" })
