@@ -78,7 +78,6 @@ end, { desc = "Focus Claude" })
 vim.keymap.set("n", "<leader>aa", "<cmd>ClaudeCodeDiffAccept<cr>", { desc = "Accept diff" })
 vim.keymap.set("n", "<leader>ad", "<cmd>ClaudeCodeDiffDeny<cr>", { desc = "Deny diff" })
 
-
 -- Convenience helpers for iterating on this fixture.
 vim.api.nvim_create_user_command("ReproEditConfig", function()
   local config_path = vim.fn.stdpath("config") .. "/init.lua"
