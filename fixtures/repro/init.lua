@@ -63,13 +63,15 @@ end
 -- Keymaps (kept small on purpose)
 vim.keymap.set("n", "<leader>ac", function()
   if ensure_claudecode_started() then
-    vim.cmd("ClaudeCode")
+    local terminal = require("claudecode.terminal")
+    terminal.simple_toggle({}, nil)
   end
 end, { desc = "Toggle Claude" })
 
 vim.keymap.set("n", "<leader>af", function()
   if ensure_claudecode_started() then
-    vim.cmd("ClaudeCodeFocus")
+    local terminal = require("claudecode.terminal")
+    terminal.focus_toggle({}, nil)
   end
 end, { desc = "Focus Claude" })
 
@@ -80,7 +82,12 @@ vim.keymap.set("n", "<leader>ad", "<cmd>ClaudeCodeDiffDeny<cr>", { desc = "Deny 
 -- Convenience helpers for iterating on this fixture.
 vim.api.nvim_create_user_command("ReproEditConfig", function()
   local config_path = vim.fn.stdpath("config") .. "/init.lua"
-  vim.cmd("edit " .. vim.fn.fnameescape(config_path))
+
+  -- Open the config file without `:edit` / `vim.cmd(...)` so we don't trigger
+  -- Treesitter "vim" language injections (which can be noisy if parsers/queries mismatch).
+  local bufnr = vim.fn.bufadd(config_path)
+  vim.fn.bufload(bufnr)
+  vim.api.nvim_set_current_buf(bufnr)
 end, { desc = "Edit the repro Neovim config" })
 
 vim.keymap.set("n", "<leader>ae", "<cmd>ReproEditConfig<cr>", { desc = "Edit repro config" })
