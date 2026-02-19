@@ -52,6 +52,16 @@ function M.register_all()
   M.register(require("claudecode.tools.check_document_dirty"))
   M.register(require("claudecode.tools.save_document"))
 
+  -- Register Gas Town wizard mode tools
+  M.register(require("claudecode.tools.beads_list"))
+  M.register(require("claudecode.tools.beads_show"))
+  M.register(require("claudecode.tools.beads_update"))
+  M.register(require("claudecode.tools.formula_list"))
+  M.register(require("claudecode.tools.formula_read"))
+  M.register(require("claudecode.tools.triage_view"))
+  M.register(require("claudecode.tools.session_list"))
+  M.register(require("claudecode.tools.session_read"))
+
   -- Register internal tools without schemas (not exposed via MCP)
   M.register(require("claudecode.tools.close_tab"))
 end
