@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# nvim-claude: Wrapper that launches Claude Code inside Neovim via claudecode.nvim
+#
+# Usage: nvim-claude [claude-args...]
+# Example: nvim-claude --dangerously-skip-permissions "startup beacon"
+#
+# All arguments are captured into GT_CLAUDE_ARGS and passed to Claude
+# by the nvim claudecode.nvim plugin's auto-start autocmd.
+
+export GT_CLAUDE_ARGS="$*"
+exec nvim
