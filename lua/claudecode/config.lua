@@ -37,7 +37,7 @@ M.defaults = {
   context_mode = {
     enabled = false, -- Opt-in: show context-mode stats on terminal winbar
     poll_interval_ms = 3000, -- How often to check the stats file
-    stats_file = nil, -- Override auto-discovery path (~/.claude/context-mode/stats.json)
+    stats_dir = nil, -- Override stats directory (~/.claude/context-mode/)
     format = "compact", -- "compact" or "full"
   },
 }
@@ -191,8 +191,8 @@ function M.validate(config)
         "context_mode.poll_interval_ms must be a number >= 500"
       )
     end
-    if config.context_mode.stats_file ~= nil then
-      assert(type(config.context_mode.stats_file) == "string", "context_mode.stats_file must be a string")
+    if config.context_mode.stats_dir ~= nil then
+      assert(type(config.context_mode.stats_dir) == "string", "context_mode.stats_dir must be a string")
     end
     if config.context_mode.format ~= nil then
       assert(

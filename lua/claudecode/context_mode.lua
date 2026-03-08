@@ -12,11 +12,11 @@ local M = {}
 ---@class ContextModeConfig
 ---@field enabled boolean
 ---@field poll_interval_ms number
----@field stats_file string|nil
+---@field stats_dir string|nil
 ---@field format string
 
-local DEFAULT_STATS_FILE = vim.fn.expand("~/.claude/context-mode/stats.json")
-local STALE_THRESHOLD_MS = 60000
+local STATS_DIR = vim.fn.expand("~/.claude/context-mode")
+local STALE_THRESHOLD_MS = 600000 -- 10 minutes
 
 ---@type vim.loop.Timer|nil
 local poll_timer = nil
@@ -108,26 +108,115 @@ function M.read_stats(file_path)
   return stats
 end
 
----Find the terminal window ID by scanning for the terminal buffer
+---Find the terminal window ID and buffer by scanning for the terminal buffer
 ---@return number|nil win_id
-function M.get_terminal_win_id()
+---@return number|nil bufnr
+function M.get_terminal_win_and_buf()
   local terminal_ok, terminal = pcall(require, "claudecode.terminal")
   if not terminal_ok then
-    return nil
+    return nil, nil
   end
 
   local bufnr = terminal.get_active_terminal_bufnr and terminal.get_active_terminal_bufnr()
   if not bufnr then
-    return nil
+    return nil, nil
   end
 
   for _, win in ipairs(vim.api.nvim_list_wins()) do
     if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == bufnr then
-      return win
+      return win, bufnr
     end
   end
 
-  return nil
+  return nil, bufnr
+end
+
+---Find the terminal window ID (backward compat)
+---@return number|nil win_id
+function M.get_terminal_win_id()
+  local win_id, _ = M.get_terminal_win_and_buf()
+  return win_id
+end
+
+---Get the parent PID of a process by reading /proc/{pid}/stat
+---@param pid number
+---@return number|nil ppid
+local function get_ppid(pid)
+  local f = io.open("/proc/" .. pid .. "/stat", "r")
+  if not f then
+    return nil
+  end
+  local content = f:read("*a")
+  f:close()
+  -- /proc/pid/stat format: pid (comm) state ppid ...
+  -- comm can contain spaces/parens, so match after the last ')'
+  local after_comm = content:match("^.*%)%s+%S+%s+(%d+)")
+  return after_comm and tonumber(after_comm)
+end
+
+---Check if candidate_pid is a descendant of ancestor_pid
+---@param candidate_pid number
+---@param ancestor_pid number
+---@param max_depth number|nil Maximum depth to walk (default 10)
+---@return boolean
+local function is_descendant(candidate_pid, ancestor_pid, max_depth)
+  max_depth = max_depth or 10
+  local pid = candidate_pid
+  for _ = 1, max_depth do
+    if pid == ancestor_pid then
+      return true
+    end
+    if pid <= 1 then
+      return false
+    end
+    local ppid = get_ppid(pid)
+    if not ppid or ppid == pid then
+      return false
+    end
+    pid = ppid
+  end
+  return false
+end
+
+---Get the job PID of the terminal buffer
+---@param bufnr number
+---@return number|nil
+local function get_terminal_job_pid(bufnr)
+  local ok, job_id = pcall(vim.api.nvim_buf_get_var, bufnr, "terminal_job_id")
+  if not ok or not job_id then
+    return nil
+  end
+  local pid_ok, pid = pcall(vim.fn.jobpid, job_id)
+  if not pid_ok then
+    return nil
+  end
+  return pid
+end
+
+---Scan stats directory for per-PID stats files
+---@return table[] Array of {path=string, stats=table}
+local function scan_stats_files()
+  local results = {}
+  local dir = config and config.stats_dir or STATS_DIR
+  -- Handle both legacy stats.json and per-PID stats-{pid}.json
+  local handle = vim.loop.fs_scandir(dir)
+  if not handle then
+    return results
+  end
+  while true do
+    local name, type = vim.loop.fs_scandir_next(handle)
+    if not name then
+      break
+    end
+    if type == "file" and (name:match("^stats%-%d+%.json$") or name == "stats.json") then
+      local path = dir .. "/" .. name
+      local stats = M.read_stats(path)
+      if stats then
+        table.insert(results, { path = path, stats = stats })
+      end
+    end
+  end
+  return results
 end
 
 ---Check if stats are stale based on updated_at timestamp
@@ -137,11 +226,43 @@ local function is_stale(stats)
   if not stats or not stats.updated_at then
     return true
   end
-  local now_ms = vim.loop.now()
-  -- updated_at is epoch ms, vim.loop.now() is ms since process start
-  -- Use os.time() * 1000 for epoch comparison
   local now_epoch = os.time() * 1000
   return (now_epoch - stats.updated_at) > STALE_THRESHOLD_MS
+end
+
+---Find the best matching stats file for the current terminal
+---@param terminal_bufnr number|nil
+---@return table|nil stats
+local function find_matching_stats(terminal_bufnr)
+  local entries = scan_stats_files()
+  if #entries == 0 then
+    return nil
+  end
+
+  -- If we have a terminal buffer, try process tree matching
+  if terminal_bufnr then
+    local job_pid = get_terminal_job_pid(terminal_bufnr)
+    if job_pid then
+      for _, entry in ipairs(entries) do
+        if entry.stats.pid and not is_stale(entry.stats) then
+          if is_descendant(entry.stats.pid, job_pid) then
+            return entry.stats
+          end
+        end
+      end
+    end
+  end
+
+  -- Fallback: pick the most recently updated non-stale entry
+  local best = nil
+  for _, entry in ipairs(entries) do
+    if not is_stale(entry.stats) then
+      if not best or (entry.stats.updated_at or 0) > (best.updated_at or 0) then
+        best = entry.stats
+      end
+    end
+  end
+  return best
 end
 
 ---Update the winbar on the terminal window
@@ -150,17 +271,15 @@ local function update_winbar()
     return
   end
 
-  local stats_file = config.stats_file or DEFAULT_STATS_FILE
-  local stats = M.read_stats(stats_file)
-  local win_id = M.get_terminal_win_id()
+  local win_id, bufnr = M.get_terminal_win_and_buf()
+  local stats = find_matching_stats(bufnr)
 
   if not win_id then
     last_stats = stats
     return
   end
 
-  if not stats or is_stale(stats) then
-    -- Clear winbar if no stats or stale
+  if not stats then
     pcall(vim.api.nvim_set_option_value, "winbar", "", { win = win_id })
     last_stats = nil
     return
