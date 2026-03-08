@@ -1,3 +1,4 @@
 {"actor":"lora_forge/witness","comment":null,"created_at":"2026-03-02T20:36:03Z","event_type":"created","id":1,"issue_id":"cc-rig-claudecode","new_value":"","old_value":""}
 {"actor":"lora_forge/witness","comment":"Added label: gt:rig","created_at":"2026-03-02T20:36:03Z","event_type":"label_added","id":2,"issue_id":"cc-rig-claudecode","new_value":null,"old_value":null}
 {"actor":"mayor","comment":"Added label: status:docked","created_at":"2026-03-03T09:57:55Z","event_type":"label_added","id":3,"issue_id":"cc-rig-claudecode","new_value":null,"old_value":null}
+{"actor":"mayor","comment":null,"created_at":"2026-03-08T15:34:07Z","event_type":"created","id":4,"issue_id":"cc-2xf","new_value":"","old_value":""}
