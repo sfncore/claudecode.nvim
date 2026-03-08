@@ -34,6 +34,12 @@ M.defaults = {
     { name = "Claude Haiku 4.5 (Latest)", value = "haiku" },
   },
   terminal = nil, -- Will be lazy-loaded to avoid circular dependency
+  context_mode = {
+    enabled = false, -- Opt-in: show context-mode stats on terminal winbar
+    poll_interval_ms = 3000, -- How often to check the stats file
+    stats_file = nil, -- Override auto-discovery path (~/.claude/context-mode/stats.json)
+    format = "compact", -- "compact" or "full"
+  },
 }
 
 ---Validates the provided configuration table.
@@ -171,6 +177,29 @@ function M.validate(config)
     assert(type(model) == "table", "models[" .. i .. "] must be a table")
     assert(type(model.name) == "string" and model.name ~= "", "models[" .. i .. "].name must be a non-empty string")
     assert(type(model.value) == "string" and model.value ~= "", "models[" .. i .. "].value must be a non-empty string")
+  end
+
+  -- Validate context_mode
+  if config.context_mode ~= nil then
+    assert(type(config.context_mode) == "table", "context_mode must be a table")
+    if config.context_mode.enabled ~= nil then
+      assert(type(config.context_mode.enabled) == "boolean", "context_mode.enabled must be a boolean")
+    end
+    if config.context_mode.poll_interval_ms ~= nil then
+      assert(
+        type(config.context_mode.poll_interval_ms) == "number" and config.context_mode.poll_interval_ms >= 500,
+        "context_mode.poll_interval_ms must be a number >= 500"
+      )
+    end
+    if config.context_mode.stats_file ~= nil then
+      assert(type(config.context_mode.stats_file) == "string", "context_mode.stats_file must be a string")
+    end
+    if config.context_mode.format ~= nil then
+      assert(
+        config.context_mode.format == "compact" or config.context_mode.format == "full",
+        "context_mode.format must be 'compact' or 'full'"
+      )
+    end
   end
 
   return true

@@ -474,6 +474,14 @@ function M.start(show_startup_notification)
     selection.enable(M.state.server, M.state.config.visual_demotion_delay_ms)
   end
 
+  -- Start context-mode winbar if enabled
+  if M.state.config.context_mode and M.state.config.context_mode.enabled then
+    local ctx_ok, context_mode = pcall(require, "claudecode.context_mode")
+    if ctx_ok then
+      context_mode.setup(M.state.config.context_mode)
+    end
+  end
+
   if show_startup_notification then
     logger.info("init", "Claude Code integration started on port " .. tostring(M.state.port))
   end
@@ -513,6 +521,12 @@ function M.stop()
   M.state.server = nil
   M.state.port = nil
   M.state.auth_token = nil
+
+  -- Stop context-mode winbar
+  local ctx_ok, context_mode = pcall(require, "claudecode.context_mode")
+  if ctx_ok then
+    context_mode.stop()
+  end
 
   -- Clear any queued @ mentions when server stops
   clear_mention_queue()
