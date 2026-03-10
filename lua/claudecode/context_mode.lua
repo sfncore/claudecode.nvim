@@ -265,29 +265,14 @@ local function find_matching_stats(terminal_bufnr)
   return best
 end
 
----Update the winbar on the terminal window
-local function update_winbar()
+---Update cached stats from disk
+local function update_stats()
   if not config then
     return
   end
 
-  local win_id, bufnr = M.get_terminal_win_and_buf()
-  local stats = find_matching_stats(bufnr)
-
-  if not win_id then
-    last_stats = stats
-    return
-  end
-
-  if not stats then
-    pcall(vim.api.nvim_set_option_value, "winbar", "", { win = win_id })
-    last_stats = nil
-    return
-  end
-
-  last_stats = stats
-  local winbar_text = M.format_winbar(stats, config.format or "compact")
-  pcall(vim.api.nvim_set_option_value, "winbar", winbar_text, { win = win_id })
+  local _, bufnr = M.get_terminal_win_and_buf()
+  last_stats = find_matching_stats(bufnr)
 end
 
 ---Start polling for context-mode stats
@@ -312,7 +297,7 @@ function M.setup(cfg)
   end
 
   M.start()
-  logger.debug("context_mode", "Context-mode winbar enabled, polling every " .. cfg.poll_interval_ms .. "ms")
+  logger.debug("context_mode", "Context-mode stats polling every " .. cfg.poll_interval_ms .. "ms")
 end
 
 ---Start the polling timer
@@ -329,23 +314,17 @@ function M.start()
     1000, -- initial delay: 1s
     interval,
     vim.schedule_wrap(function()
-      update_winbar()
+      update_stats()
     end)
   )
 end
 
----Stop the polling timer and clear winbar
+---Stop the polling timer
 function M.stop()
   if poll_timer then
     poll_timer:stop()
     poll_timer:close()
     poll_timer = nil
-  end
-
-  -- Clear winbar on the terminal window
-  local win_id = M.get_terminal_win_id()
-  if win_id then
-    pcall(vim.api.nvim_set_option_value, "winbar", "", { win = win_id })
   end
 
   last_stats = nil
@@ -356,6 +335,21 @@ end
 ---@return table|nil
 function M.get_stats()
   return last_stats
+end
+
+---Lualine component: returns formatted stats string for the statusline
+---@return string
+function M.lualine()
+  if not last_stats then
+    return ""
+  end
+  return M.format_winbar(last_stats, (config and config.format) or "compact")
+end
+
+---Condition for lualine: returns true when stats are available
+---@return boolean
+function M.has_stats()
+  return last_stats ~= nil
 end
 
 return M
