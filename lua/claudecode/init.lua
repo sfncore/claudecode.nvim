@@ -390,6 +390,57 @@ end
 
 ---Start the Claude Code integration
 ---@param show_startup_notification? boolean Whether to show a notification upon successful startup (defaults to true)
+---Register crew_messages as a prism MCP tool so Claude Code can read mesh messages
+function M._register_crew_messages_tool()
+  local prism_tools_ok, prism_tools = pcall(require, "prism.mcp.tools")
+  if not prism_tools_ok then
+    logger.debug("init", "prism.mcp.tools not available, skipping crew_messages tool registration")
+    return
+  end
+
+  local crew_msg_ok, crew_messages = pcall(require, "claudecode.crew_messages")
+  if not crew_msg_ok then
+    logger.warn("init", "crew_messages module not available")
+    return
+  end
+
+  -- Skip if already registered
+  if prism_tools.get and prism_tools.get("crew_messages") then
+    return
+  end
+
+  prism_tools.register("crew_messages", {
+    description = "Read unread messages from the Gas Town crew mesh. Returns messages from other agents delivered via the WebSocket adapter.",
+    inputSchema = {
+      type = "object",
+      properties = {
+        all = {
+          type = "boolean",
+          description = "If true, return all messages (including already-read). Default: false (unread only).",
+        },
+      },
+    },
+    handler = function(params)
+      local msgs
+      if params and params.all then
+        msgs = crew_messages.read_all()
+      else
+        msgs = crew_messages.read_unread()
+      end
+      return {
+        content = {
+          {
+            type = "text",
+            text = crew_messages.format_for_resource(msgs),
+          },
+        },
+      }
+    end,
+  })
+
+  logger.info("init", "Registered crew_messages MCP tool")
+end
+
 ---Connect to the tmux adapter for crew communication
 ---Can be called manually via :ClaudeCodeAdapterConnect or automatically on start
 function M._connect_adapter()
@@ -574,6 +625,9 @@ function M.start(show_startup_notification)
   if vim.env.GT_ROLE or vim.env.GT_AGENT then
     M._connect_adapter()
   end
+
+  -- Register crew_messages MCP tool (works regardless of adapter)
+  M._register_crew_messages_tool()
 
   if show_startup_notification then
     logger.info("init", "Claude Code integration started on port " .. tostring(M.state.port))
