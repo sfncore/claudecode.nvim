@@ -300,7 +300,7 @@ function M.setup(cfg)
     return
   end
 
-  -- Restart the timer on setup to handle re-init scenarios
+  -- Always restart the timer on setup to handle re-init scenarios
   -- (e.g., config reload, session restart where module state persists
   -- but the uv timer handle may be invalid)
   if poll_timer then
