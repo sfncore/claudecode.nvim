@@ -296,7 +296,19 @@ function M.setup(cfg)
   config = cfg
 
   if not cfg.enabled then
+    M.stop()
     return
+  end
+
+  -- Restart the timer on setup to handle re-init scenarios
+  -- (e.g., config reload, session restart where module state persists
+  -- but the uv timer handle may be invalid)
+  if poll_timer then
+    pcall(function()
+      poll_timer:stop()
+      poll_timer:close()
+    end)
+    poll_timer = nil
   end
 
   M.start()

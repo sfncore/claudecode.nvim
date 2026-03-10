@@ -9,8 +9,8 @@
 --- Lazy-initialized: call M.connect() explicitly or via :ClaudeCode adapter connect.
 
 local frame = require("claudecode.server.frame")
-local utils = require("claudecode.server.utils")
 local logger = require("claudecode.logger")
+local utils = require("claudecode.server.utils")
 
 local M = {}
 
@@ -152,13 +152,11 @@ local function process_buffer()
       else
         logger.debug("adapter", "Non-JSON frame: " .. parsed.payload:sub(1, 100))
       end
-
     elseif parsed.opcode == frame.OPCODE.PING then
       local pong = create_masked_frame(frame.OPCODE.PONG, parsed.payload)
       if M.state.tcp then
         M.state.tcp:write(pong)
       end
-
     elseif parsed.opcode == frame.OPCODE.CLOSE then
       logger.info("adapter", "Server sent close frame")
       M._handle_disconnect("server closed connection")
@@ -396,7 +394,6 @@ function M._do_connect()
         if #M.state.buffer > 0 then
           process_buffer()
         end
-
       elseif M.state.state == STATE.OPEN then
         M.state.buffer = M.state.buffer .. data
         process_buffer()
@@ -415,14 +412,17 @@ function M.connect(opts)
     return
   end
 
-  -- Resolve config from opts or environment (must read vim.env here, not in libuv callbacks)
-  M.state.agent_name = opts.agent or vim.env.GT_AGENT or vim.env.GT_ROLE or ""
+  -- Resolve agent identity from opts or environment.
+  -- Prefer session-specific names (GT_SESSION, tmux session) over the generic
+  -- GT_AGENT ("nvim-claude") so that the adapter mesh can route direct/broadcast
+  -- messages to the correct crew member via WS instead of falling back to nudge queue.
+  M.state.agent_name = opts.agent or vim.env.GT_SESSION or vim.env.GT_ROLE or vim.env.GT_AGENT or ""
   M.state.host = opts.host or "127.0.0.1"
   M.state.port = tonumber(opts.port or vim.env.GT_TMUX_ADAPTER_PORT or "8080") or 8080
   M.state.auth_token = opts.auth_token or vim.env.GT_TMUX_ADAPTER_TOKEN or ""
 
   -- Set handlers
-  M.state.on_message = opts.on_message
+  M.state.on_message = opts.on_message or M._default_on_message
   M.state.on_agents = opts.on_agents
   M.state.on_connect = opts.on_connect
   M.state.on_disconnect = opts.on_disconnect
@@ -561,6 +561,73 @@ end
 ---@return string
 function M.get_agent_name()
   return M.state.agent_name
+end
+
+---Default on_message handler: routes by priority and writes to nudge queue
+---Used when connect() is called without an on_message option
+---@param msg table Incoming message with from, body, priority fields
+function M._default_on_message(msg)
+  local from = msg.from or "unknown"
+  local body = msg.body or ""
+  local priority = msg.priority or "normal"
+
+  -- Route by priority:
+  --   urgent  → vim.notify(WARN) + nudge queue
+  --   normal  → vim.notify + nudge queue
+  --   low     → vim.notify only (no Claude context cost)
+  local prefix = priority == "urgent" and "[Gas Town URGENT] " or "[Gas Town] "
+  local level = priority == "urgent" and vim.log.levels.WARN or vim.log.levels.INFO
+  vim.notify(prefix .. from .. ": " .. body, level)
+
+  if priority == "low" then
+    return
+  end
+
+  -- Write to nudge queue — same format as gt nudge --mode=queue
+  -- UserPromptSubmit hook (gt mail check --inject) drains automatically
+  local town_root = vim.env.GT_TOWN_ROOT or vim.fn.expand("~/gt")
+  local session = vim.env.GT_SESSION or vim.env.TMUX_SESSION or ""
+  if session == "" then
+    local handle = io.popen("tmux display-message -p '#S' 2>/dev/null")
+    if handle then
+      session = handle:read("*l") or ""
+      handle:close()
+    end
+  end
+
+  if session == "" then
+    logger.warn("adapter", "Cannot determine session name for nudge queue")
+    return
+  end
+
+  local safe_session = session:gsub("/", "_")
+  local queue_dir = town_root .. "/.runtime/nudge_queue/" .. safe_session
+  vim.fn.mkdir(queue_dir, "p")
+
+  local timestamp_ns = tostring(vim.loop.hrtime())
+  local random_hex = string.format("%08x", math.random(0, 0x7FFFFFFF))
+  local filename = timestamp_ns .. "-" .. random_hex .. ".json"
+
+  local now = os.date("!%Y-%m-%dT%H:%M:%SZ")
+  local ttl_seconds = priority == "urgent" and 7200 or 1800
+  local expires = os.date("!%Y-%m-%dT%H:%M:%SZ", os.time() + ttl_seconds)
+
+  local queue_entry = vim.json.encode({
+    sender = from,
+    message = body,
+    priority = priority,
+    timestamp = now,
+    expires_at = expires,
+  })
+
+  local f = io.open(queue_dir .. "/" .. filename, "w")
+  if f then
+    f:write(queue_entry)
+    f:close()
+    logger.debug("adapter", "Queued ws message from " .. from .. " to nudge queue")
+  else
+    logger.warn("adapter", "Failed to write to nudge queue: " .. queue_dir)
+  end
 end
 
 return M
