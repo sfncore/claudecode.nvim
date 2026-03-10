@@ -563,7 +563,7 @@ function M.get_agent_name()
   return M.state.agent_name
 end
 
----Default on_message handler: routes by priority and writes to nudge queue
+---Default on_message handler: pushes to crew message store for MCP delivery
 ---Used when connect() is called without an on_message option
 ---@param msg table Incoming message with from, body, priority fields
 function M._default_on_message(msg)
@@ -571,10 +571,6 @@ function M._default_on_message(msg)
   local body = msg.body or ""
   local priority = msg.priority or "normal"
 
-  -- Route by priority:
-  --   urgent  → vim.notify(WARN) + nudge queue
-  --   normal  → vim.notify + nudge queue
-  --   low     → vim.notify only (no Claude context cost)
   local prefix = priority == "urgent" and "[Gas Town URGENT] " or "[Gas Town] "
   local level = priority == "urgent" and vim.log.levels.WARN or vim.log.levels.INFO
   vim.notify(prefix .. from .. ": " .. body, level)
@@ -583,50 +579,10 @@ function M._default_on_message(msg)
     return
   end
 
-  -- Write to nudge queue — same format as gt nudge --mode=queue
-  -- UserPromptSubmit hook (gt mail check --inject) drains automatically
-  local town_root = vim.env.GT_TOWN_ROOT or vim.fn.expand("~/gt")
-  local session = vim.env.GT_SESSION or vim.env.TMUX_SESSION or ""
-  if session == "" then
-    local handle = io.popen("tmux display-message -p '#S' 2>/dev/null")
-    if handle then
-      session = handle:read("*l") or ""
-      handle:close()
-    end
-  end
-
-  if session == "" then
-    logger.warn("adapter", "Cannot determine session name for nudge queue")
-    return
-  end
-
-  local safe_session = session:gsub("/", "_")
-  local queue_dir = town_root .. "/.runtime/nudge_queue/" .. safe_session
-  vim.fn.mkdir(queue_dir, "p")
-
-  local timestamp_ns = tostring(vim.loop.hrtime())
-  local random_hex = string.format("%08x", math.random(0, 0x7FFFFFFF))
-  local filename = timestamp_ns .. "-" .. random_hex .. ".json"
-
-  local now = os.date("!%Y-%m-%dT%H:%M:%SZ")
-  local ttl_seconds = priority == "urgent" and 7200 or 1800
-  local expires = os.date("!%Y-%m-%dT%H:%M:%SZ", os.time() + ttl_seconds)
-
-  local queue_entry = vim.json.encode({
-    sender = from,
-    message = body,
-    priority = priority,
-    timestamp = now,
-    expires_at = expires,
-  })
-
-  local f = io.open(queue_dir .. "/" .. filename, "w")
-  if f then
-    f:write(queue_entry)
-    f:close()
-    logger.debug("adapter", "Queued ws message from " .. from .. " to nudge queue")
-  else
-    logger.warn("adapter", "Failed to write to nudge queue: " .. queue_dir)
+  -- Push to in-memory message store — triggers MCP resource notification
+  local crew_msg_ok, crew_messages = pcall(require, "claudecode.crew_messages")
+  if crew_msg_ok then
+    crew_messages.push(msg)
   end
 end
 
