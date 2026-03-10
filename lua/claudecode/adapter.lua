@@ -490,6 +490,17 @@ function M.list_agents(callback)
   }, callback)
 end
 
+---Report agent status to the adapter
+---@param status string One of "idle", "mid-turn", "busy-with-overseer"
+---@return boolean ok
+---@return string|nil err
+function M.report_status(status)
+  return M.send({
+    type = "report-status",
+    status = status,
+  })
+end
+
 ---Check if connected to the adapter
 ---@return boolean
 function M.is_connected()

@@ -489,6 +489,7 @@ function M.start(show_startup_notification)
       adapter.connect({
         on_connect = function()
           logger.info("init", "Connected to tmux adapter")
+          adapter.report_status("idle")
         end,
         on_disconnect = function(reason)
           logger.debug("init", "Tmux adapter disconnected: " .. reason)
@@ -506,6 +507,42 @@ function M.start(show_startup_notification)
           end
         end,
       })
+
+      -- Status reporting: detect terminal focus for busy-with-overseer
+      local status_augroup = vim.api.nvim_create_augroup("ClaudeCodeAdapterStatus", { clear = true })
+      vim.api.nvim_create_autocmd("TermEnter", {
+        group = status_augroup,
+        callback = function()
+          if adapter.is_connected() then
+            adapter.report_status("busy-with-overseer")
+          end
+        end,
+      })
+      vim.api.nvim_create_autocmd("TermLeave", {
+        group = status_augroup,
+        callback = function()
+          if adapter.is_connected() then
+            adapter.report_status("idle")
+          end
+        end,
+      })
+
+      -- Periodic status refresh (adapter has 60s timeout)
+      local status_timer = vim.loop.new_timer()
+      M.state._adapter_status_timer = status_timer
+      status_timer:start(30000, 30000, function()
+        if adapter.is_connected() then
+          vim.schedule(function()
+            -- Check if we're currently in a terminal window
+            local mode = vim.fn.mode()
+            if mode == "t" then
+              adapter.report_status("busy-with-overseer")
+            else
+              adapter.report_status("idle")
+            end
+          end)
+        end
+      end)
     end
   end
 
@@ -549,7 +586,14 @@ function M.stop()
   M.state.port = nil
   M.state.auth_token = nil
 
-  -- Disconnect from tmux adapter
+  -- Disconnect from tmux adapter and cleanup status timer
+  if M.state._adapter_status_timer then
+    M.state._adapter_status_timer:close()
+    M.state._adapter_status_timer = nil
+  end
+  pcall(function()
+    vim.api.nvim_del_augroup_by_name("ClaudeCodeAdapterStatus")
+  end)
   local adapter_ok, adapter = pcall(require, "claudecode.adapter")
   if adapter_ok and adapter.is_connected() then
     adapter.disconnect()
