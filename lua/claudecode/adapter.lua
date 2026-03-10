@@ -466,7 +466,8 @@ function M.disconnect()
   logger.info("adapter", "Disconnected from tmux adapter")
 end
 
----Send a message to another agent via the adapter
+---Send a message to another agent via the adapter (context update mode)
+---Arrives at recipient's on_message handler → MCP broadcast → Claude sees it as context
 ---@param to string Target agent name
 ---@param body string Message body
 ---@param callback function|nil Optional callback(response)
@@ -477,6 +478,32 @@ function M.send_message(to, body, callback)
     type = "send-message",
     to = to,
     body = body,
+  }, callback)
+end
+
+---Send a prompt directly to another agent's Claude session via the adapter
+---Uses adapter's send-prompt endpoint which delivers via tmux to Claude's stdin
+---This is the "nudge immediate" equivalent over WebSocket — interrupts the agent
+---@param to string Target agent name
+---@param prompt string The prompt text to inject
+---@param callback function|nil Optional callback(response)
+---@return boolean ok
+---@return string|nil err
+function M.send_prompt(to, prompt, callback)
+  return M.send({
+    type = "send-prompt",
+    to = to,
+    prompt = prompt,
+  }, callback)
+end
+
+---Subscribe to all message traffic (overseer observer mode)
+---@param callback function|nil Optional callback(response)
+---@return boolean ok
+---@return string|nil err
+function M.subscribe_messages(callback)
+  return M.send({
+    type = "subscribe-messages",
   }, callback)
 end
 

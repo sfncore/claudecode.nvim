@@ -497,7 +497,18 @@ function M.start(show_startup_notification)
         on_message = function(msg)
           local from = msg.from or "unknown"
           local body = msg.body or ""
+
+          -- Show notification to human
           vim.notify("[Gas Town] " .. from .. ": " .. body, vim.log.levels.INFO)
+
+          -- Push to Claude via MCP WebSocket (context update)
+          if M.state.server then
+            M.state.server.broadcast("gas_town/message", {
+              from = from,
+              body = body,
+              timestamp = os.date("%H:%M:%S"),
+            })
+          end
         end,
         on_agents = function(msg)
           if msg.type == "agent-added" then
