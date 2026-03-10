@@ -500,8 +500,8 @@ function M.start(show_startup_notification)
           local priority = msg.priority or "normal"
 
           -- Route by priority:
-          --   urgent  → vim.notify + send_prompt (interrupt Claude immediately)
-          --   normal  → vim.notify + inbox file + at_mentioned (context update)
+          --   urgent  → vim.notify(WARN) + nudge queue (picked up at next turn boundary)
+          --   normal  → vim.notify + nudge queue (picked up at next turn boundary)
           --   low     → vim.notify only (FYI, no Claude context cost)
 
           -- Always show notification to human
@@ -510,46 +510,58 @@ function M.start(show_startup_notification)
           vim.notify(prefix .. from .. ": " .. body, level)
 
           if priority == "low" then
-            -- Low priority: notification only, no Claude context cost
             return
           end
 
-          -- Write message to inbox file and notify Claude via at_mentioned
-          local inbox_path = vim.fn.expand("~/.claude/gas-town-inbox.md")
-          local timestamp = os.date("%H:%M:%S")
-          local tag = priority == "urgent" and " [URGENT]" or ""
-          local entry = string.format("\n## [%s] %s%s\n%s\n", timestamp, from, tag, body)
-
-          -- Count existing lines to know where new content starts
-          local existing_lines = 0
-          local f = io.open(inbox_path, "r")
-          if f then
-            for _ in f:lines() do
-              existing_lines = existing_lines + 1
+          -- Write to nudge queue — same format as gt nudge --mode=queue
+          -- UserPromptSubmit hook (gt mail check --inject) drains this automatically
+          local town_root = vim.env.GT_TOWN_ROOT or vim.fn.expand("~/gt")
+          local session = vim.env.GT_SESSION or vim.env.TMUX_SESSION or ""
+          if session == "" then
+            -- Try to detect tmux session name
+            local handle = io.popen("tmux display-message -p '#S' 2>/dev/null")
+            if handle then
+              session = handle:read("*l") or ""
+              handle:close()
             end
-            f:close()
           end
 
-          -- Append message
-          f = io.open(inbox_path, "a")
+          if session == "" then
+            logger.warn("init", "Cannot determine session name for nudge queue")
+            return
+          end
+
+          local safe_session = session:gsub("/", "_")
+          local queue_dir = town_root .. "/.runtime/nudge_queue/" .. safe_session
+
+          -- Ensure queue directory exists
+          vim.fn.mkdir(queue_dir, "p")
+
+          -- Generate unique filename: <nanosecond-timestamp>-<random-hex>.json
+          local timestamp_ns = tostring(vim.loop.hrtime())
+          local random_hex = string.format("%08x", math.random(0, 0x7FFFFFFF))
+          local filename = timestamp_ns .. "-" .. random_hex .. ".json"
+
+          -- Build queue entry matching gt nudge format
+          local now = os.date("!%Y-%m-%dT%H:%M:%SZ")
+          local ttl_seconds = priority == "urgent" and 7200 or 1800
+          local expires = os.date("!%Y-%m-%dT%H:%M:%SZ", os.time() + ttl_seconds)
+
+          local queue_entry = vim.json.encode({
+            sender = from,
+            message = body,
+            priority = priority,
+            timestamp = now,
+            expires_at = expires,
+          })
+
+          local f = io.open(queue_dir .. "/" .. filename, "w")
           if f then
-            f:write(entry)
+            f:write(queue_entry)
             f:close()
-
-            -- Count new lines
-            local new_lines = 0
-            for _ in entry:gmatch("\n") do
-              new_lines = new_lines + 1
-            end
-
-            -- Notify Claude to read the new message via at_mentioned
-            if M.state.server then
-              M.state.server.broadcast("at_mentioned", {
-                filePath = inbox_path,
-                lineStart = existing_lines + 1,
-                lineEnd = existing_lines + new_lines,
-              })
-            end
+            logger.debug("init", "Queued ws message from " .. from .. " to nudge queue")
+          else
+            logger.warn("init", "Failed to write to nudge queue: " .. queue_dir)
           end
         end,
         on_agents = function(msg)
