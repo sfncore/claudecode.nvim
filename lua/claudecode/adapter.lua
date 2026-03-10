@@ -563,8 +563,10 @@ function M.get_agent_name()
   return M.state.agent_name
 end
 
----Default on_message handler: pushes to crew message store for MCP delivery
----Used when connect() is called without an on_message option
+---Default on_message handler: pushes to crew message store AND nudge queue
+---Used when connect() is called without an on_message option.
+---The crew_messages store makes messages available via MCP tool.
+---The nudge queue delivers messages as <system-reminder> at Claude's next turn boundary.
 ---@param msg table Incoming message with from, body, priority fields
 function M._default_on_message(msg)
   local from = msg.from or "unknown"
@@ -575,14 +577,40 @@ function M._default_on_message(msg)
   local level = priority == "urgent" and vim.log.levels.WARN or vim.log.levels.INFO
   vim.notify(prefix .. from .. ": " .. body, level)
 
-  if priority == "low" then
-    return
-  end
-
   -- Push to in-memory message store — triggers MCP resource notification
   local crew_msg_ok, crew_messages = pcall(require, "claudecode.crew_messages")
   if crew_msg_ok then
     crew_messages.push(msg)
+  end
+
+  if priority == "low" then
+    return
+  end
+
+  -- Write to nudge queue so message arrives in Claude context as <system-reminder>
+  local agent_name = M.state.agent_name or ""
+  if agent_name == "" then
+    return
+  end
+
+  local queue_dir = (vim.env.HOME or "") .. "/gt/.runtime/nudge_queue/" .. agent_name
+  vim.fn.mkdir(queue_dir, "p")
+  local ts = string.format("%.0f", vim.loop.hrtime())
+  local hex = string.format("%08x", math.random(0, 0xFFFFFFFF))
+  local path = queue_dir .. "/" .. ts .. "-" .. hex .. ".json"
+  local ok_enc, payload = pcall(vim.json.encode, {
+    sender = from,
+    message = "[from " .. from .. "] " .. body,
+    priority = priority,
+    timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+    expires_at = os.date("!%Y-%m-%dT%H:%M:%SZ", os.time() + 1800),
+  })
+  if ok_enc then
+    local f = io.open(path, "w")
+    if f then
+      f:write(payload)
+      f:close()
+    end
   end
 end
 
