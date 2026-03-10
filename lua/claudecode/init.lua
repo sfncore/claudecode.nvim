@@ -482,6 +482,33 @@ function M.start(show_startup_notification)
     end
   end
 
+  -- Connect to tmux adapter if in a Gas Town environment
+  if vim.env.GT_ROLE or vim.env.GT_AGENT then
+    local adapter_ok, adapter = pcall(require, "claudecode.adapter")
+    if adapter_ok then
+      adapter.connect({
+        on_connect = function()
+          logger.info("init", "Connected to tmux adapter")
+        end,
+        on_disconnect = function(reason)
+          logger.debug("init", "Tmux adapter disconnected: " .. reason)
+        end,
+        on_message = function(msg)
+          local from = msg.from or "unknown"
+          local body = msg.body or ""
+          vim.notify("[Gas Town] " .. from .. ": " .. body, vim.log.levels.INFO)
+        end,
+        on_agents = function(msg)
+          if msg.type == "agent-added" then
+            logger.debug("init", "Agent joined: " .. (msg.agent or "unknown"))
+          elseif msg.type == "agent-removed" then
+            logger.debug("init", "Agent left: " .. (msg.agent or "unknown"))
+          end
+        end,
+      })
+    end
+  end
+
   if show_startup_notification then
     logger.info("init", "Claude Code integration started on port " .. tostring(M.state.port))
   end
@@ -521,6 +548,12 @@ function M.stop()
   M.state.server = nil
   M.state.port = nil
   M.state.auth_token = nil
+
+  -- Disconnect from tmux adapter
+  local adapter_ok, adapter = pcall(require, "claudecode.adapter")
+  if adapter_ok and adapter.is_connected() then
+    adapter.disconnect()
+  end
 
   -- Stop context-mode winbar
   local ctx_ok, context_mode = pcall(require, "claudecode.context_mode")
