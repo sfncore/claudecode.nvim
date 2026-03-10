@@ -497,6 +497,23 @@ function M.send_prompt(to, prompt, callback)
   }, callback)
 end
 
+---Deliver a prompt to another agent's nudge queue via the adapter (server-side queue write)
+---More reliable than send_prompt (tmux send-keys) — uses the same queue as gt nudge --mode=queue
+---@param to string Target agent name
+---@param prompt string The prompt text
+---@param priority string|nil "normal" (default) or "urgent"
+---@param callback function|nil Optional callback(response)
+---@return boolean ok
+---@return string|nil err
+function M.deliver_prompt(to, prompt, priority, callback)
+  return M.send({
+    type = "deliver-prompt",
+    agent = to,
+    prompt = prompt,
+    priority = priority or "normal",
+  }, callback)
+end
+
 ---Subscribe to all message traffic (overseer observer mode)
 ---@param callback function|nil Optional callback(response)
 ---@return boolean ok

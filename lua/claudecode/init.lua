@@ -390,6 +390,136 @@ end
 
 ---Start the Claude Code integration
 ---@param show_startup_notification? boolean Whether to show a notification upon successful startup (defaults to true)
+---Connect to the tmux adapter for crew communication
+---Can be called manually via :ClaudeCodeAdapterConnect or automatically on start
+function M._connect_adapter()
+  local adapter_ok, adapter = pcall(require, "claudecode.adapter")
+  if not adapter_ok then
+    logger.warn("init", "Failed to load adapter module")
+    return
+  end
+
+  if adapter.is_connected() then
+    vim.notify("Adapter already connected as " .. adapter.get_agent_name(), vim.log.levels.INFO)
+    return
+  end
+
+  adapter.connect({
+    on_connect = function()
+      logger.info("init", "Connected to tmux adapter")
+      adapter.report_status("idle")
+    end,
+    on_disconnect = function(reason)
+      logger.debug("init", "Tmux adapter disconnected: " .. reason)
+    end,
+    on_message = function(msg)
+      local from = msg.from or "unknown"
+      local body = msg.body or ""
+      local priority = msg.priority or "normal"
+
+      -- Route by priority:
+      --   urgent  → vim.notify(WARN) + nudge queue
+      --   normal  → vim.notify + nudge queue
+      --   low     → vim.notify only (no Claude context cost)
+      local prefix = priority == "urgent" and "[Gas Town URGENT] " or "[Gas Town] "
+      local level = priority == "urgent" and vim.log.levels.WARN or vim.log.levels.INFO
+      vim.notify(prefix .. from .. ": " .. body, level)
+
+      if priority == "low" then
+        return
+      end
+
+      -- Write to nudge queue — same format as gt nudge --mode=queue
+      -- UserPromptSubmit hook (gt mail check --inject) drains automatically
+      local town_root = vim.env.GT_TOWN_ROOT or vim.fn.expand("~/gt")
+      local session = vim.env.GT_SESSION or vim.env.TMUX_SESSION or ""
+      if session == "" then
+        local handle = io.popen("tmux display-message -p '#S' 2>/dev/null")
+        if handle then
+          session = handle:read("*l") or ""
+          handle:close()
+        end
+      end
+
+      if session == "" then
+        logger.warn("init", "Cannot determine session name for nudge queue")
+        return
+      end
+
+      local safe_session = session:gsub("/", "_")
+      local queue_dir = town_root .. "/.runtime/nudge_queue/" .. safe_session
+      vim.fn.mkdir(queue_dir, "p")
+
+      local timestamp_ns = tostring(vim.loop.hrtime())
+      local random_hex = string.format("%08x", math.random(0, 0x7FFFFFFF))
+      local filename = timestamp_ns .. "-" .. random_hex .. ".json"
+
+      local now = os.date("!%Y-%m-%dT%H:%M:%SZ")
+      local ttl_seconds = priority == "urgent" and 7200 or 1800
+      local expires = os.date("!%Y-%m-%dT%H:%M:%SZ", os.time() + ttl_seconds)
+
+      local queue_entry = vim.json.encode({
+        sender = from,
+        message = body,
+        priority = priority,
+        timestamp = now,
+        expires_at = expires,
+      })
+
+      local f = io.open(queue_dir .. "/" .. filename, "w")
+      if f then
+        f:write(queue_entry)
+        f:close()
+        logger.debug("init", "Queued ws message from " .. from .. " to nudge queue")
+      else
+        logger.warn("init", "Failed to write to nudge queue: " .. queue_dir)
+      end
+    end,
+    on_agents = function(msg)
+      if msg.type == "agent-added" then
+        logger.debug("init", "Agent joined: " .. (msg.agent or "unknown"))
+      elseif msg.type == "agent-removed" then
+        logger.debug("init", "Agent left: " .. (msg.agent or "unknown"))
+      end
+    end,
+  })
+
+  -- Status reporting: detect terminal focus for busy-with-overseer
+  local status_augroup = vim.api.nvim_create_augroup("ClaudeCodeAdapterStatus", { clear = true })
+  vim.api.nvim_create_autocmd("TermEnter", {
+    group = status_augroup,
+    callback = function()
+      if adapter.is_connected() then
+        adapter.report_status("busy-with-overseer")
+      end
+    end,
+  })
+  vim.api.nvim_create_autocmd("TermLeave", {
+    group = status_augroup,
+    callback = function()
+      if adapter.is_connected() then
+        adapter.report_status("idle")
+      end
+    end,
+  })
+
+  -- Periodic status refresh (adapter has 60s timeout)
+  local status_timer = vim.loop.new_timer()
+  M.state._adapter_status_timer = status_timer
+  status_timer:start(30000, 30000, function()
+    if adapter.is_connected() then
+      vim.schedule(function()
+        local mode = vim.fn.mode()
+        if mode == "t" then
+          adapter.report_status("busy-with-overseer")
+        else
+          adapter.report_status("idle")
+        end
+      end)
+    end
+  end)
+end
+
 ---@return boolean success Whether the operation was successful
 ---@return number|string port_or_error The WebSocket port if successful, or error message if failed
 function M.start(show_startup_notification)
@@ -484,131 +614,7 @@ function M.start(show_startup_notification)
 
   -- Connect to tmux adapter if in a Gas Town environment
   if vim.env.GT_ROLE or vim.env.GT_AGENT then
-    local adapter_ok, adapter = pcall(require, "claudecode.adapter")
-    if adapter_ok then
-      adapter.connect({
-        on_connect = function()
-          logger.info("init", "Connected to tmux adapter")
-          adapter.report_status("idle")
-        end,
-        on_disconnect = function(reason)
-          logger.debug("init", "Tmux adapter disconnected: " .. reason)
-        end,
-        on_message = function(msg)
-          local from = msg.from or "unknown"
-          local body = msg.body or ""
-          local priority = msg.priority or "normal"
-
-          -- Route by priority:
-          --   urgent  → vim.notify(WARN) + nudge queue (picked up at next turn boundary)
-          --   normal  → vim.notify + nudge queue (picked up at next turn boundary)
-          --   low     → vim.notify only (FYI, no Claude context cost)
-
-          -- Always show notification to human
-          local prefix = priority == "urgent" and "[Gas Town URGENT] " or "[Gas Town] "
-          local level = priority == "urgent" and vim.log.levels.WARN or vim.log.levels.INFO
-          vim.notify(prefix .. from .. ": " .. body, level)
-
-          if priority == "low" then
-            return
-          end
-
-          -- Write to nudge queue — same format as gt nudge --mode=queue
-          -- UserPromptSubmit hook (gt mail check --inject) drains this automatically
-          local town_root = vim.env.GT_TOWN_ROOT or vim.fn.expand("~/gt")
-          local session = vim.env.GT_SESSION or vim.env.TMUX_SESSION or ""
-          if session == "" then
-            -- Try to detect tmux session name
-            local handle = io.popen("tmux display-message -p '#S' 2>/dev/null")
-            if handle then
-              session = handle:read("*l") or ""
-              handle:close()
-            end
-          end
-
-          if session == "" then
-            logger.warn("init", "Cannot determine session name for nudge queue")
-            return
-          end
-
-          local safe_session = session:gsub("/", "_")
-          local queue_dir = town_root .. "/.runtime/nudge_queue/" .. safe_session
-
-          -- Ensure queue directory exists
-          vim.fn.mkdir(queue_dir, "p")
-
-          -- Generate unique filename: <nanosecond-timestamp>-<random-hex>.json
-          local timestamp_ns = tostring(vim.loop.hrtime())
-          local random_hex = string.format("%08x", math.random(0, 0x7FFFFFFF))
-          local filename = timestamp_ns .. "-" .. random_hex .. ".json"
-
-          -- Build queue entry matching gt nudge format
-          local now = os.date("!%Y-%m-%dT%H:%M:%SZ")
-          local ttl_seconds = priority == "urgent" and 7200 or 1800
-          local expires = os.date("!%Y-%m-%dT%H:%M:%SZ", os.time() + ttl_seconds)
-
-          local queue_entry = vim.json.encode({
-            sender = from,
-            message = body,
-            priority = priority,
-            timestamp = now,
-            expires_at = expires,
-          })
-
-          local f = io.open(queue_dir .. "/" .. filename, "w")
-          if f then
-            f:write(queue_entry)
-            f:close()
-            logger.debug("init", "Queued ws message from " .. from .. " to nudge queue")
-          else
-            logger.warn("init", "Failed to write to nudge queue: " .. queue_dir)
-          end
-        end,
-        on_agents = function(msg)
-          if msg.type == "agent-added" then
-            logger.debug("init", "Agent joined: " .. (msg.agent or "unknown"))
-          elseif msg.type == "agent-removed" then
-            logger.debug("init", "Agent left: " .. (msg.agent or "unknown"))
-          end
-        end,
-      })
-
-      -- Status reporting: detect terminal focus for busy-with-overseer
-      local status_augroup = vim.api.nvim_create_augroup("ClaudeCodeAdapterStatus", { clear = true })
-      vim.api.nvim_create_autocmd("TermEnter", {
-        group = status_augroup,
-        callback = function()
-          if adapter.is_connected() then
-            adapter.report_status("busy-with-overseer")
-          end
-        end,
-      })
-      vim.api.nvim_create_autocmd("TermLeave", {
-        group = status_augroup,
-        callback = function()
-          if adapter.is_connected() then
-            adapter.report_status("idle")
-          end
-        end,
-      })
-
-      -- Periodic status refresh (adapter has 60s timeout)
-      local status_timer = vim.loop.new_timer()
-      M.state._adapter_status_timer = status_timer
-      status_timer:start(30000, 30000, function()
-        if adapter.is_connected() then
-          vim.schedule(function()
-            -- Check if we're currently in a terminal window
-            local mode = vim.fn.mode()
-            if mode == "t" then
-              adapter.report_status("busy-with-overseer")
-            else
-              adapter.report_status("idle")
-            end
-          end)
-        end
-      end)
-    end
+    M._connect_adapter()
   end
 
   if show_startup_notification then
@@ -745,6 +751,12 @@ function M._create_commands()
     end)
   end, {
     desc = "Show crew agents and their status",
+  })
+
+  vim.api.nvim_create_user_command("ClaudeCodeAdapterConnect", function()
+    M._connect_adapter()
+  end, {
+    desc = "Connect to tmux adapter for crew communication",
   })
 
   ---@param file_paths table List of file paths to add
