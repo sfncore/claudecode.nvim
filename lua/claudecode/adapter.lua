@@ -607,7 +607,12 @@ function M._default_on_message(msg)
     if chan then
       local prefix = priority == "urgent" and "[URGENT] " or ""
       local text = prefix .. "[from " .. from .. "] " .. body
-      vim.fn.chansend(chan, text .. "\r")
+      -- Send text first, then Enter separately after delay.
+      -- Claude Code's TUI needs the \r as a distinct input event to trigger submission.
+      vim.fn.chansend(chan, text)
+      vim.defer_fn(function()
+        vim.fn.chansend(chan, "\r")
+      end, 500)
       return
     end
   end
