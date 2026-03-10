@@ -563,55 +563,39 @@ function M.get_agent_name()
   return M.state.agent_name
 end
 
----Default on_message handler: pushes to crew message store AND nudge queue
+---Default on_message handler: pushes to crew message store and delivers to Claude terminal
 ---Used when connect() is called without an on_message option.
----The crew_messages store makes messages available via MCP tool.
----The nudge queue delivers messages as <system-reminder> at Claude's next turn boundary.
 ---@param msg table Incoming message with from, body, priority fields
 function M._default_on_message(msg)
   local from = msg.from or "unknown"
   local body = msg.body or ""
   local priority = msg.priority or "normal"
 
-  local prefix = priority == "urgent" and "[Gas Town URGENT] " or "[Gas Town] "
-  local level = priority == "urgent" and vim.log.levels.WARN or vim.log.levels.INFO
-  vim.notify(prefix .. from .. ": " .. body, level)
-
-  -- Push to in-memory message store — triggers MCP resource notification
+  -- Push to in-memory message store for MCP tool access
   local crew_msg_ok, crew_messages = pcall(require, "claudecode.crew_messages")
   if crew_msg_ok then
     crew_messages.push(msg)
   end
 
-  if priority == "low" then
-    return
-  end
-
-  -- Write to nudge queue so message arrives in Claude context as <system-reminder>
-  local agent_name = M.state.agent_name or ""
-  if agent_name == "" then
-    return
-  end
-
-  local queue_dir = (vim.env.HOME or "") .. "/gt/.runtime/nudge_queue/" .. agent_name
-  vim.fn.mkdir(queue_dir, "p")
-  local ts = string.format("%.0f", vim.loop.hrtime())
-  local hex = string.format("%08x", math.random(0, 0xFFFFFFFF))
-  local path = queue_dir .. "/" .. ts .. "-" .. hex .. ".json"
-  local ok_enc, payload = pcall(vim.json.encode, {
-    sender = from,
-    message = "[from " .. from .. "] " .. body,
-    priority = priority,
-    timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
-    expires_at = os.date("!%Y-%m-%dT%H:%M:%SZ", os.time() + 1800),
-  })
-  if ok_enc then
-    local f = io.open(path, "w")
-    if f then
-      f:write(payload)
-      f:close()
+  -- Deliver directly to Claude's terminal stdin via chansend
+  local terminal_ok, terminal = pcall(require, "claudecode.terminal")
+  if terminal_ok and terminal.get_active_terminal_bufnr then
+    local bufnr = terminal.get_active_terminal_bufnr()
+    if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
+      local chan = vim.b[bufnr].terminal_job_id
+      if chan then
+        local prefix = priority == "urgent" and "[URGENT] " or ""
+        local text = prefix .. "[from " .. from .. "] " .. body
+        vim.fn.chansend(chan, text .. "\r")
+        return
+      end
     end
   end
+
+  -- Fallback: vim.notify if terminal not available
+  local prefix = priority == "urgent" and "[Gas Town URGENT] " or "[Gas Town] "
+  local level = priority == "urgent" and vim.log.levels.WARN or vim.log.levels.INFO
+  vim.notify(prefix .. from .. ": " .. body, level)
 end
 
 return M
