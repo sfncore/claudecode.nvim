@@ -492,7 +492,7 @@ end
 function M.send_prompt(to, prompt, callback)
   return M.send({
     type = "send-prompt",
-    to = to,
+    agent = to,
     prompt = prompt,
   }, callback)
 end

@@ -497,14 +497,28 @@ function M.start(show_startup_notification)
         on_message = function(msg)
           local from = msg.from or "unknown"
           local body = msg.body or ""
+          local priority = msg.priority or "normal"
 
-          -- Show notification to human
-          vim.notify("[Gas Town] " .. from .. ": " .. body, vim.log.levels.INFO)
+          -- Route by priority:
+          --   urgent  → vim.notify + send_prompt (interrupt Claude immediately)
+          --   normal  → vim.notify + inbox file + at_mentioned (context update)
+          --   low     → vim.notify only (FYI, no Claude context cost)
+
+          -- Always show notification to human
+          local prefix = priority == "urgent" and "[Gas Town URGENT] " or "[Gas Town] "
+          local level = priority == "urgent" and vim.log.levels.WARN or vim.log.levels.INFO
+          vim.notify(prefix .. from .. ": " .. body, level)
+
+          if priority == "low" then
+            -- Low priority: notification only, no Claude context cost
+            return
+          end
 
           -- Write message to inbox file and notify Claude via at_mentioned
           local inbox_path = vim.fn.expand("~/.claude/gas-town-inbox.md")
           local timestamp = os.date("%H:%M:%S")
-          local entry = string.format("\n## [%s] %s\n%s\n", timestamp, from, body)
+          local tag = priority == "urgent" and " [URGENT]" or ""
+          local entry = string.format("\n## [%s] %s%s\n%s\n", timestamp, from, tag, body)
 
           -- Count existing lines to know where new content starts
           local existing_lines = 0
@@ -675,6 +689,50 @@ function M._create_commands()
     end
   end, {
     desc = "Show Claude Code integration status",
+  })
+
+  vim.api.nvim_create_user_command("CrewStatus", function()
+    local adapter = require("claudecode.adapter")
+    if not adapter.is_connected() then
+      vim.notify("Adapter not connected", vim.log.levels.WARN)
+      return
+    end
+
+    adapter.list_agents(function(response)
+      local agents = response and response.agents or {}
+      if #agents == 0 then
+        vim.notify("No agents registered", vim.log.levels.INFO)
+        return
+      end
+
+      local lines = { "Crew Status:", "" }
+      for _, agent in ipairs(agents) do
+        local status_icon = agent.status == "idle" and "●"
+          or agent.status == "mid-turn" and "◉"
+          or agent.status == "busy-with-overseer" and "◆"
+          or "○"
+        local attached = agent.attached and "" or " (detached)"
+        local ws = agent.ws and " [ws]" or ""
+        table.insert(
+          lines,
+          string.format(
+            "  %s %-20s %-12s %s%s%s",
+            status_icon,
+            agent.name or "?",
+            agent.status or "unknown",
+            agent.role or "",
+            attached,
+            ws
+          )
+        )
+      end
+      table.insert(lines, "")
+      table.insert(lines, "Send: adapter.send_message(name, body)")
+      table.insert(lines, "Ping: adapter.send_prompt(name, prompt)")
+      vim.notify(table.concat(lines, "\n"), vim.log.levels.INFO)
+    end)
+  end, {
+    desc = "Show crew agents and their status",
   })
 
   ---@param file_paths table List of file paths to add
