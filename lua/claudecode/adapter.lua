@@ -578,17 +578,37 @@ function M._default_on_message(msg)
   end
 
   -- Deliver directly to Claude's terminal stdin via chansend
+  -- Try managed terminal first, then fall back to scanning for Claude terminal buffers
+  local bufnr, chan
   local terminal_ok, terminal = pcall(require, "claudecode.terminal")
   if terminal_ok and terminal.get_active_terminal_bufnr then
-    local bufnr = terminal.get_active_terminal_bufnr()
-    if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
-      local chan = vim.b[bufnr].terminal_job_id
-      if chan then
-        local prefix = priority == "urgent" and "[URGENT] " or ""
-        local text = prefix .. "[from " .. from .. "] " .. body
-        vim.fn.chansend(chan, text .. "\r")
-        return
+    bufnr = terminal.get_active_terminal_bufnr()
+  end
+
+  -- Fallback: scan all buffers for a Claude terminal (handles externally-started terminals)
+  if not bufnr then
+    for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+      if vim.api.nvim_buf_is_loaded(buf) and vim.bo[buf].buftype == "terminal" then
+        local name = vim.api.nvim_buf_get_name(buf)
+        if name:match("claude") then
+          local c = vim.b[buf].terminal_job_id
+          if c then
+            bufnr = buf
+            chan = c
+            break
+          end
+        end
       end
+    end
+  end
+
+  if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
+    chan = chan or vim.b[bufnr].terminal_job_id
+    if chan then
+      local prefix = priority == "urgent" and "[URGENT] " or ""
+      local text = prefix .. "[from " .. from .. "] " .. body
+      vim.fn.chansend(chan, text .. "\r")
+      return
     end
   end
 
