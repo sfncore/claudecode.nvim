@@ -501,13 +501,41 @@ function M.start(show_startup_notification)
           -- Show notification to human
           vim.notify("[Gas Town] " .. from .. ": " .. body, vim.log.levels.INFO)
 
-          -- Push to Claude via MCP WebSocket (context update)
-          if M.state.server then
-            M.state.server.broadcast("gas_town/message", {
-              from = from,
-              body = body,
-              timestamp = os.date("%H:%M:%S"),
-            })
+          -- Write message to inbox file and notify Claude via at_mentioned
+          local inbox_path = vim.fn.expand("~/.claude/gas-town-inbox.md")
+          local timestamp = os.date("%H:%M:%S")
+          local entry = string.format("\n## [%s] %s\n%s\n", timestamp, from, body)
+
+          -- Count existing lines to know where new content starts
+          local existing_lines = 0
+          local f = io.open(inbox_path, "r")
+          if f then
+            for _ in f:lines() do
+              existing_lines = existing_lines + 1
+            end
+            f:close()
+          end
+
+          -- Append message
+          f = io.open(inbox_path, "a")
+          if f then
+            f:write(entry)
+            f:close()
+
+            -- Count new lines
+            local new_lines = 0
+            for _ in entry:gmatch("\n") do
+              new_lines = new_lines + 1
+            end
+
+            -- Notify Claude to read the new message via at_mentioned
+            if M.state.server then
+              M.state.server.broadcast("at_mentioned", {
+                filePath = inbox_path,
+                lineStart = existing_lines + 1,
+                lineEnd = existing_lines + new_lines,
+              })
+            end
           end
         end,
         on_agents = function(msg)
