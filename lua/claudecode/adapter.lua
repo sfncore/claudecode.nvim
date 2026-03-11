@@ -224,6 +224,12 @@ function M._handle_disconnect(reason, skip_reconnect)
   M.state.callbacks = {}
   M.state.buffer = ""
 
+  -- Report offline status
+  local status_ok, status_mod = pcall(require, "claudecode.status")
+  if status_ok then
+    status_mod.offline()
+  end
+
   if was_open then
     logger.warn("adapter", "Disconnected: " .. reason)
     vim.schedule(function()
@@ -402,6 +408,12 @@ function M._do_connect()
 
           -- Subscribe to agent lifecycle events
           M.send({ type = "subscribe-agents" })
+
+          -- Report idle status on successful connection
+          local status_ok, status_mod = pcall(require, "claudecode.status")
+          if status_ok then
+            status_mod.idle("connected")
+          end
 
           if M.state.on_connect then
             M.state.on_connect()

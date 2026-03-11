@@ -51,6 +51,8 @@ function M.register_all()
   M.register(require("claudecode.tools.get_workspace_folders"))
   M.register(require("claudecode.tools.check_document_dirty"))
   M.register(require("claudecode.tools.save_document"))
+  M.register(require("claudecode.tools.send_crew_message"))
+  M.register(require("claudecode.tools.get_mesh_status"))
 
   -- Register internal tools without schemas (not exposed via MCP)
   M.register(require("claudecode.tools.close_tab"))
