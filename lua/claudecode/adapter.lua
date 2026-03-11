@@ -158,8 +158,23 @@ local function process_buffer()
         M.state.tcp:write(pong)
       end
     elseif parsed.opcode == frame.OPCODE.CLOSE then
-      logger.info("adapter", "Server sent close frame")
-      M._handle_disconnect("server closed connection")
+      -- Parse close code from payload (first 2 bytes = status code per RFC 6455)
+      local close_code = 1000
+      local close_reason = ""
+      if #parsed.payload >= 2 then
+        close_code = parsed.payload:byte(1) * 256 + parsed.payload:byte(2)
+        if #parsed.payload > 2 then
+          close_reason = parsed.payload:sub(3)
+        end
+      end
+      logger.info("adapter", "Server sent close frame: code=" .. close_code .. " reason=" .. close_reason)
+      -- 4001 = identity replaced by new connection, don't reconnect
+      if close_code == 4001 then
+        logger.info("adapter", "Identity replaced by new connection, not reconnecting")
+        M._handle_disconnect("identity replaced", true)
+      else
+        M._handle_disconnect("server closed connection")
+      end
     end
   end
 end
@@ -179,9 +194,10 @@ local function start_ping_timer()
   end)
 end
 
----Handle disconnection and schedule reconnect
+---Handle disconnection and optionally schedule reconnect
 ---@param reason string
-function M._handle_disconnect(reason)
+---@param skip_reconnect boolean|nil If true, don't auto-reconnect (e.g. identity replaced)
+function M._handle_disconnect(reason, skip_reconnect)
   local was_open = M.state.state == STATE.OPEN
   M.state.state = STATE.DISCONNECTED
 
@@ -217,8 +233,10 @@ function M._handle_disconnect(reason)
     end)
   end
 
-  -- Schedule reconnect with backoff
-  M._schedule_reconnect()
+  -- Schedule reconnect with backoff (unless evicted by identity replacement)
+  if not skip_reconnect then
+    M._schedule_reconnect()
+  end
 end
 
 ---Schedule a reconnect attempt with exponential backoff
