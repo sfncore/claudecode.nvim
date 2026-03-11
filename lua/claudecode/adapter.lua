@@ -453,7 +453,7 @@ function M.connect(opts)
 
   -- Set handlers
   M.state.on_message = opts.on_message or M._default_on_message
-  M.state.on_agents = opts.on_agents
+  M.state.on_agents = opts.on_agents or M._default_on_agents
   M.state.on_connect = opts.on_connect
   M.state.on_disconnect = opts.on_disconnect
 
@@ -607,6 +607,21 @@ function M._default_on_message(msg)
     crew_messages.push(msg)
   end
 
+  -- Write to file-based spool for UserPromptSubmit hook flush
+  local session_id = vim.env.GT_SESSION_ID or "cc"
+  local spool_path = "/tmp/crew-messages-" .. session_id .. ".spool"
+  local spool_line = vim.json.encode({
+    from = from,
+    body = body,
+    priority = priority,
+    ts = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+  })
+  local f = io.open(spool_path, "a")
+  if f then
+    f:write(spool_line .. "\n")
+    f:close()
+  end
+
   -- Deliver directly to Claude's terminal stdin via chansend
   -- Try managed terminal first, then fall back to scanning for Claude terminal buffers
   local bufnr, chan
@@ -651,6 +666,46 @@ function M._default_on_message(msg)
   local prefix = priority == "urgent" and "[Gas Town URGENT] " or "[Gas Town] "
   local level = priority == "urgent" and vim.log.levels.WARN or vim.log.levels.INFO
   vim.notify(prefix .. from .. ": " .. body, level)
+end
+
+---Default on_agents handler: writes agent lifecycle events to notification spool.
+---Events like agent-added, agent-removed, agent-updated are written to a file
+---that the Notification hook reads and injects as system-reminders.
+---@param msg table Incoming agent lifecycle event
+function M._default_on_agents(msg)
+  local event_type = msg.type or "unknown"
+  local agent = msg.agent or msg.name or "unknown"
+  local status = msg.status or nil
+
+  -- Only spool meaningful events (skip noise)
+  if event_type == "agent-updated" and not status then
+    return
+  end
+
+  local session_id = vim.env.GT_SESSION_ID or "cc"
+  local spool_path = "/tmp/crew-notifications-" .. session_id .. ".spool"
+
+  local entry = vim.json.encode({
+    event = event_type,
+    agent = agent,
+    status = status,
+    ts = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+  })
+
+  local f = io.open(spool_path, "a")
+  if f then
+    f:write(entry .. "\n")
+    f:close()
+  end
+
+  -- Also show as vim.notify for immediate visibility
+  local labels = {
+    ["agent-added"] = "joined mesh",
+    ["agent-removed"] = "left mesh",
+    ["agent-updated"] = "status: " .. (status or "?"),
+  }
+  local label = labels[event_type] or event_type
+  vim.notify("[Mesh] " .. agent .. " " .. label, vim.log.levels.INFO)
 end
 
 return M
