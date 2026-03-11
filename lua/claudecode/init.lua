@@ -369,6 +369,14 @@ function M.setup(opts)
     M.start(false) -- Suppress notification on auto-start
   end
 
+  -- Auto-connect to tmux adapter when running in a Gas Town crew environment.
+  -- Deferred slightly to let the MCP server start first.
+  if vim.env.GT_ROLE or vim.env.GT_SESSION or vim.env.GT_AGENT then
+    vim.defer_fn(function()
+      M._connect_adapter()
+    end, 1000)
+  end
+
   M._create_commands()
 
   vim.api.nvim_create_autocmd("VimLeavePre", {
@@ -441,8 +449,10 @@ function M._register_crew_messages_tool()
   logger.info("init", "Registered crew_messages MCP tool")
 end
 
----Connect to the tmux adapter for crew communication
----Can be called manually via :ClaudeCodeAdapterConnect or automatically on start
+---Connect to the tmux adapter for crew communication.
+---Auto-called on startup when GT_ROLE is set. Can also be called manually
+---via :ClaudeCodeAdapterConnect. Uses adapter's default handlers for message
+---and agent lifecycle events (which write to spool files for hook flush).
 function M._connect_adapter()
   local adapter_ok, adapter = pcall(require, "claudecode.adapter")
   if not adapter_ok then
@@ -451,46 +461,35 @@ function M._connect_adapter()
   end
 
   if adapter.is_connected() then
-    vim.notify("Adapter already connected as " .. adapter.get_agent_name(), vim.log.levels.INFO)
+    logger.debug("init", "Adapter already connected as " .. adapter.get_agent_name())
     return
   end
 
+  -- Resolve agent identity: prefer GT_SESSION (unique per crew member),
+  -- then try to derive from tmux session name, then fall back to GT_ROLE.
+  -- The adapter.connect() defaults handle GT_SESSION/GT_ROLE fallback,
+  -- but we can also resolve from tmux for cases where env vars aren't set.
+  local agent_name = vim.env.GT_SESSION or nil
+  if not agent_name and vim.fn.executable("tmux") == 1 then
+    local tmux_session = vim.fn.system("tmux display-message -p '#S' 2>/dev/null"):gsub("%s+$", "")
+    if tmux_session ~= "" and not tmux_session:match("^no server") then
+      agent_name = tmux_session
+    end
+  end
+
+  -- Use adapter's default handlers (they write to spool files for hook flush)
+  -- Only override on_connect to add logging.
   adapter.connect({
+    agent = agent_name,
     on_connect = function()
-      logger.info("init", "Connected to tmux adapter")
-      adapter.report_status("idle")
+      logger.info("init", "Connected to tmux adapter as " .. adapter.get_agent_name())
     end,
     on_disconnect = function(reason)
       logger.debug("init", "Tmux adapter disconnected: " .. reason)
     end,
-    on_message = function(msg)
-      local from = msg.from or "unknown"
-      local body = msg.body or ""
-      local priority = msg.priority or "normal"
-
-      -- Show vim notification for all priorities
-      local prefix = priority == "urgent" and "[Gas Town URGENT] " or "[Gas Town] "
-      local level = priority == "urgent" and vim.log.levels.WARN or vim.log.levels.INFO
-      vim.notify(prefix .. from .. ": " .. body, level)
-
-      if priority == "low" then
-        return
-      end
-
-      -- Push to in-memory message store — triggers MCP resource notification
-      -- so Claude Code can read messages directly via prism's MCP connection
-      local crew_msg_ok, crew_messages = pcall(require, "claudecode.crew_messages")
-      if crew_msg_ok then
-        crew_messages.push(msg)
-      end
-    end,
-    on_agents = function(msg)
-      if msg.type == "agent-added" then
-        logger.debug("init", "Agent joined: " .. (msg.agent or "unknown"))
-      elseif msg.type == "agent-removed" then
-        logger.debug("init", "Agent left: " .. (msg.agent or "unknown"))
-      end
-    end,
+    -- on_message and on_agents intentionally omitted — adapter uses its
+    -- _default_on_message and _default_on_agents which handle spool writes,
+    -- crew_messages.push(), chansend delivery, and vim.notify.
   })
 
   -- Status reporting: detect terminal focus for busy-with-overseer

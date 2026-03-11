@@ -59,7 +59,7 @@ M.state = {
 }
 
 -- Constants
-local RECONNECT_MAX_DELAY = 30000
+local RECONNECT_MAX_DELAY = 10000
 local PING_INTERVAL = 25000
 
 ---Generate next message ID
